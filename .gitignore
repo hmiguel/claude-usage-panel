@@ -1,0 +1,14 @@
+# Secrets — copy include/config.example.h to include/config.h and fill in
+include/config.h
+
+# Build output
+.pio/
+
+# Vendor demo (reference only, re-downloadable from the Waveshare wiki)
+06_LVGL_Arduino_v9/
+
+# Python
+__pycache__/
+
+# Editors
+.vscode/
