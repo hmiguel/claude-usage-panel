@@ -52,7 +52,7 @@ static void build_today_tile(lv_obj_t *tile) {
   style_tile_bg(tile);
 
   lv_obj_t *title = make_label(tile, &lv_font_montserrat_20, COLOR_TEXT);
-  lv_label_set_text(title, "Today");
+  lv_label_set_text(title, "Session");
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
 
   today_arc = lv_arc_create(tile);
