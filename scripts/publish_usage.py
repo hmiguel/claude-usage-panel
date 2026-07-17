@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Publish usage data / thinking state to the panel via HiveMQ Cloud.
 
-Credentials are read from include/config.h (gitignored) — no secrets here.
+Config: copy scripts/.env.example to scripts/.env (gitignored) and fill in
+broker credentials. Real environment variables override .env. Standalone —
+works without the firmware tree.
 
 Usage:
   pip install paho-mqtt
@@ -12,14 +14,12 @@ Usage:
 
 import json
 import os
-import re
 import ssl
 import sys
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
-CONFIG_H = Path(__file__).resolve().parent.parent / "include" / "config.h"
 ENV_FILE = Path(__file__).resolve().parent / ".env"
 
 CONFIG_KEYS = ("MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASS",
@@ -40,18 +40,16 @@ def _parse_env_file(path: Path) -> dict:
 
 
 def read_config() -> dict:
-    """Priority: environment variables > scripts/.env > include/config.h.
-    The .env path lets the scripts run standalone on machines without the
-    firmware tree's (gitignored) config.h."""
-    cfg = {}
-    if CONFIG_H.exists():
-        text = CONFIG_H.read_text(encoding="utf-8")
-        for m in re.finditer(r'^#define\s+(\w+)\s+(?:"([^"]*)"|(\d+))', text, flags=re.MULTILINE):
-            cfg[m.group(1)] = m.group(2) if m.group(2) is not None else int(m.group(3))
-    cfg.update(_parse_env_file(ENV_FILE))
+    """Config comes from scripts/.env (copy .env.example), overridable by
+    real environment variables. Fully standalone — no firmware tree needed."""
+    cfg = _parse_env_file(ENV_FILE)
     for k in CONFIG_KEYS:
         if k in os.environ:
             cfg[k] = os.environ[k]
+    missing = [k for k in ("MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASS") if k not in cfg]
+    if missing:
+        sys.exit(f"missing config {', '.join(missing)} — copy {ENV_FILE.parent / '.env.example'} "
+                 f"to {ENV_FILE} and fill it in")
     return cfg
 
 
@@ -60,11 +58,7 @@ def main() -> None:
         print(__doc__)
         sys.exit(1)
 
-    cfg = read_config()
-    missing = [k for k in ("MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASS") if k not in cfg]
-    if missing:
-        print(f"missing in {CONFIG_H}: {', '.join(missing)}")
-        sys.exit(1)
+    cfg = read_config()  # exits with a helpful message if incomplete
 
     mode, arg = sys.argv[1], sys.argv[2]
 

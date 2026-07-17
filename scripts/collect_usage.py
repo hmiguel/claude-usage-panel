@@ -5,9 +5,9 @@ Reads ~/.claude/projects/**/*.jsonl (written by Claude Code itself), computes
 session/week/per-model usage, and publishes the panel's usage JSON to MQTT.
 
 No credentials or network calls beyond the MQTT broker (config from
-include/config.h). Limits are estimated against configurable budgets —
-calibrate SESSION_BUDGET / WEEK_BUDGET below by comparing with Claude Code's
-/usage screen.
+scripts/.env — copy .env.example). Limits are estimated against configurable
+budgets — calibrate SESSION_BUDGET / WEEK_BUDGET below by comparing with
+Claude Code's /usage screen.
 
 Usage:
   python collect_usage.py --dry-run     # print JSON, don't publish
@@ -22,7 +22,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from publish_usage import read_config  # shared config.h parser
+from publish_usage import read_config  # shared .env config loader
 
 # --- Tunables -----------------------------------------------------------
 # Weighted tokens: cache reads are far cheaper than fresh tokens, so weight
