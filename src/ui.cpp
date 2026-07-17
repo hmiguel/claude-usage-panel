@@ -184,6 +184,39 @@ static void format_tokens(char *out, size_t n, long tokens) {
   }
 }
 
+// Last received usage snapshot, so the countdown can be recomputed every
+// second instead of only when a payload arrives.
+static UsageData last_data;
+static bool have_data = false;
+
+#define CLOCK_SANE_EPOCH 1577836800L // 2020-01-01: NTP has synced past this
+
+static void refresh_today_sublabel() {
+  if (!have_data) return;
+
+  char buf[64], used_str[12], limit_str[12], eta_str[12];
+  format_tokens(used_str, sizeof(used_str), last_data.tokens_used);
+  format_tokens(limit_str, sizeof(limit_str), last_data.tokens_limit);
+
+  time_t now = time(nullptr);
+  if (now < CLOCK_SANE_EPOCH) {
+    // Clock not NTP-synced yet — a countdown against 1970 would claim
+    // "resets in ~56 years". Show a placeholder until sync lands.
+    snprintf(eta_str, sizeof(eta_str), "--");
+  } else {
+    long remaining_min = (last_data.session_resets_at - now) / 60;
+    if (remaining_min < 0) remaining_min = 0;
+    if (remaining_min >= 60) {
+      snprintf(eta_str, sizeof(eta_str), "%ldh%02ldm", remaining_min / 60, remaining_min % 60);
+    } else {
+      snprintf(eta_str, sizeof(eta_str), "%ldm", remaining_min);
+    }
+  }
+
+  snprintf(buf, sizeof(buf), "%s / %s tokens - resets in %s", used_str, limit_str, eta_str);
+  lv_label_set_text(today_sub_label, buf);
+}
+
 // Updates the top-bar clock (24h local time) and WiFi indicator once/second.
 static void status_timer_cb(lv_timer_t *timer) {
   (void)timer;
@@ -201,6 +234,10 @@ static void status_timer_cb(lv_timer_t *timer) {
 
   lv_obj_set_style_text_color(
       wifi_icon, wifi_is_connected() ? COLOR_TEXT2 : lv_color_hex(0x5A2B2B), 0);
+
+  // Keeps the reset countdown live between payloads, and self-heals the
+  // "56-year countdown" shown if a payload beat the first NTP sync.
+  refresh_today_sublabel();
 }
 
 static void build_status_bar(lv_obj_t *parent) {
@@ -250,26 +287,16 @@ void ui_init() {
 }
 
 void ui_update(const UsageData &data) {
+  last_data = data;
+  have_data = true;
+
   lv_arc_set_value(today_arc, data.session_used_pct);
 
   char buf[48];
   snprintf(buf, sizeof(buf), "%d%%", data.session_used_pct);
   lv_label_set_text(today_pct_label, buf);
 
-  time_t now = time(nullptr);
-  long remaining_min = (data.session_resets_at - now) / 60;
-  if (remaining_min < 0) remaining_min = 0;
-
-  char used_str[12], limit_str[12], eta_str[12];
-  format_tokens(used_str, sizeof(used_str), data.tokens_used);
-  format_tokens(limit_str, sizeof(limit_str), data.tokens_limit);
-  if (remaining_min >= 60) {
-    snprintf(eta_str, sizeof(eta_str), "%ldh%02ldm", remaining_min / 60, remaining_min % 60);
-  } else {
-    snprintf(eta_str, sizeof(eta_str), "%ldm", remaining_min);
-  }
-  snprintf(buf, sizeof(buf), "%s / %s tokens - resets in %s", used_str, limit_str, eta_str);
-  lv_label_set_text(today_sub_label, buf);
+  refresh_today_sublabel();
 
   snprintf(buf, sizeof(buf), "%d%% used this week", data.week_used_pct);
   lv_label_set_text(week_header_label, buf);
