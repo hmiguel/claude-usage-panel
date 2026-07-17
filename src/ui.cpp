@@ -271,7 +271,9 @@ void ui_update(const UsageData &data) {
     }
   }
 
-  lv_obj_set_style_bg_color(led, data.thinking ? COLOR_ACCENT : COLOR_SURFACE, 0);
+  // Note: the thinking LED is deliberately NOT updated here — it's driven
+  // solely by ui_set_thinking() (claude/thinking topic), so periodic usage
+  // payloads can't stomp on live thinking state.
 }
 
 void ui_set_thinking(bool thinking) {
