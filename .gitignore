@@ -1,5 +1,7 @@
 # Secrets — copy include/config.example.h to include/config.h and fill in
 include/config.h
+# Secrets — copy scripts/.env.example to scripts/.env for standalone scripts
+scripts/.env
 
 # Build output
 .pio/

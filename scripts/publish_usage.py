@@ -11,6 +11,7 @@ Usage:
 """
 
 import json
+import os
 import re
 import ssl
 import sys
@@ -19,13 +20,38 @@ from pathlib import Path
 import paho.mqtt.client as mqtt
 
 CONFIG_H = Path(__file__).resolve().parent.parent / "include" / "config.h"
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+CONFIG_KEYS = ("MQTT_HOST", "MQTT_PORT", "MQTT_USER", "MQTT_PASS",
+               "MQTT_TOPIC_USAGE", "MQTT_TOPIC_THINKING")
+
+
+def _parse_env_file(path: Path) -> dict:
+    cfg = {}
+    if not path.exists():
+        return cfg
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        cfg[k.strip()] = v.strip().strip('"').strip("'")
+    return cfg
 
 
 def read_config() -> dict:
-    text = CONFIG_H.read_text(encoding="utf-8")
+    """Priority: environment variables > scripts/.env > include/config.h.
+    The .env path lets the scripts run standalone on machines without the
+    firmware tree's (gitignored) config.h."""
     cfg = {}
-    for m in re.finditer(r'^#define\s+(\w+)\s+(?:"([^"]*)"|(\d+))', text, flags=re.MULTILINE):
-        cfg[m.group(1)] = m.group(2) if m.group(2) is not None else int(m.group(3))
+    if CONFIG_H.exists():
+        text = CONFIG_H.read_text(encoding="utf-8")
+        for m in re.finditer(r'^#define\s+(\w+)\s+(?:"([^"]*)"|(\d+))', text, flags=re.MULTILINE):
+            cfg[m.group(1)] = m.group(2) if m.group(2) is not None else int(m.group(3))
+    cfg.update(_parse_env_file(ENV_FILE))
+    for k in CONFIG_KEYS:
+        if k in os.environ:
+            cfg[k] = os.environ[k]
     return cfg
 
 
