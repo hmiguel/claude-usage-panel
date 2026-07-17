@@ -194,14 +194,27 @@ static bool have_data = false;
 static void refresh_today_sublabel() {
   if (!have_data) return;
 
+  time_t now = time(nullptr);
+
+  // Session window elapsed: roll the display over locally (0%, no
+  // countdown) instead of freezing at the stale percentage until the next
+  // payload — which then repaints the real state.
+  if (now >= CLOCK_SANE_EPOCH && last_data.session_resets_at > 0 &&
+      now >= last_data.session_resets_at && last_data.tokens_used > 0) {
+    last_data.session_used_pct = 0;
+    last_data.tokens_used = 0;
+    last_data.session_resets_at = 0; // unknown until fresh data arrives
+    lv_arc_set_value(today_arc, 0);
+    lv_label_set_text(today_pct_label, "0%");
+  }
+
   char buf[64], used_str[12], limit_str[12], eta_str[12];
   format_tokens(used_str, sizeof(used_str), last_data.tokens_used);
   format_tokens(limit_str, sizeof(limit_str), last_data.tokens_limit);
 
-  time_t now = time(nullptr);
-  if (now < CLOCK_SANE_EPOCH) {
-    // Clock not NTP-synced yet — a countdown against 1970 would claim
-    // "resets in ~56 years". Show a placeholder until sync lands.
+  if (now < CLOCK_SANE_EPOCH || last_data.session_resets_at == 0) {
+    // Clock not NTP-synced yet (a countdown against 1970 would claim
+    // "resets in ~56 years"), or no known reset time — show a placeholder.
     snprintf(eta_str, sizeof(eta_str), "--");
   } else {
     long remaining_min = (last_data.session_resets_at - now) / 60;
