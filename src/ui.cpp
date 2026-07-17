@@ -174,6 +174,16 @@ static void build_nav_dots(lv_obj_t *parent) {
   }
 }
 
+// "512k" below a million, "5.2M" above — keeps the label short now that
+// real usage runs into millions of tokens.
+static void format_tokens(char *out, size_t n, long tokens) {
+  if (tokens >= 1000000) {
+    snprintf(out, n, "%.1fM", tokens / 1000000.0);
+  } else {
+    snprintf(out, n, "%ldk", tokens / 1000);
+  }
+}
+
 // Updates the top-bar clock (24h local time) and WiFi indicator once/second.
 static void status_timer_cb(lv_timer_t *timer) {
   (void)timer;
@@ -249,8 +259,16 @@ void ui_update(const UsageData &data) {
   time_t now = time(nullptr);
   long remaining_min = (data.session_resets_at - now) / 60;
   if (remaining_min < 0) remaining_min = 0;
-  snprintf(buf, sizeof(buf), "%ldk / %ldk tokens - resets in %ldm",
-           data.tokens_used / 1000, data.tokens_limit / 1000, remaining_min);
+
+  char used_str[12], limit_str[12], eta_str[12];
+  format_tokens(used_str, sizeof(used_str), data.tokens_used);
+  format_tokens(limit_str, sizeof(limit_str), data.tokens_limit);
+  if (remaining_min >= 60) {
+    snprintf(eta_str, sizeof(eta_str), "%ldh%02ldm", remaining_min / 60, remaining_min % 60);
+  } else {
+    snprintf(eta_str, sizeof(eta_str), "%ldm", remaining_min);
+  }
+  snprintf(buf, sizeof(buf), "%s / %s tokens - resets in %s", used_str, limit_str, eta_str);
   lv_label_set_text(today_sub_label, buf);
 
   snprintf(buf, sizeof(buf), "%d%% used this week", data.week_used_pct);
