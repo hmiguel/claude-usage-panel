@@ -30,8 +30,10 @@ from publish_usage import read_config  # shared config.h parser
 CACHE_READ_WEIGHT = 0.1
 # Budgets in weighted tokens. Calibrate against Claude Code's /usage screen:
 # if /usage says 40% but the panel says 20%, halve the budget.
-SESSION_BUDGET = 10_000_000  # per 5h session block
-WEEK_BUDGET = 40_000_000     # per calendar week
+# Calibrated 2026-07-17 against Claude Code's /usage screen (session 67%,
+# week 18% at 6.14M / 17.6M weighted tokens respectively).
+SESSION_BUDGET = 9_000_000    # per 5h session window
+WEEK_BUDGET = 100_000_000     # per rolling 7-day window
 SESSION_HOURS = 5
 # -----------------------------------------------------------------------
 
@@ -58,8 +60,7 @@ def model_family(model: str) -> str | None:
 def load_entries(max_age_days: float = 8.0) -> list[tuple[datetime, str, float]]:
     """Returns deduped (timestamp, family, weighted_tokens) tuples."""
     cutoff_mtime = time.time() - max_age_days * 86400
-    entries = []
-    seen = set()
+    best: dict = {}  # (message.id, requestId) -> (ts, fam, tokens)
     for path in PROJECTS_DIR.glob("*/*.jsonl"):
         try:
             if path.stat().st_mtime < cutoff_mtime:
@@ -82,39 +83,37 @@ def load_entries(max_age_days: float = 8.0) -> list[tuple[datetime, str, float]]
                     fam = model_family(msg.get("model"))
                     if fam is None:  # skips "<synthetic>" etc.
                         continue
-                    key = (msg.get("id"), d.get("requestId"))
-                    if key in seen:
-                        continue
-                    seen.add(key)
                     try:
                         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                     except ValueError:
                         continue
-                    entries.append((ts, fam, weighted_tokens(usage)))
+                    tok = weighted_tokens(usage)
+                    # A message can span several JSONL lines carrying
+                    # progressively-updated usage — keep the largest snapshot
+                    # per (message, request), not the first.
+                    key = (msg.get("id"), d.get("requestId"))
+                    prev = best.get(key)
+                    if prev is None or tok > prev[2]:
+                        best[key] = (ts, fam, tok)
         except OSError:
             continue
-    entries.sort(key=lambda e: e[0])
-    return entries
-
-
-def floor_to_hour(ts: datetime) -> datetime:
-    return ts.replace(minute=0, second=0, microsecond=0)
+    return sorted(best.values(), key=lambda e: e[0])
 
 
 def current_session(entries, now: datetime):
-    """ccusage-style 5h blocks: a block starts at the first message's hour and
-    lasts SESSION_HOURS; later messages open new blocks. Returns (tokens,
-    resets_at) for the block containing `now`, or (0, now+5h) if idle."""
+    """5h session windows anchored at the exact first message after the
+    previous window expires (matches Claude's own /usage reset times).
+    Returns (tokens, resets_at) for the window containing `now`."""
     block_start = None
     block_tokens = 0.0
     for ts, _fam, tok in entries:
         if block_start is None or ts >= block_start + timedelta(hours=SESSION_HOURS):
-            block_start = floor_to_hour(ts)
+            block_start = ts
             block_tokens = 0.0
         block_tokens += tok
     if block_start is not None and now < block_start + timedelta(hours=SESSION_HOURS):
         return block_tokens, block_start + timedelta(hours=SESSION_HOURS)
-    return 0.0, floor_to_hour(now) + timedelta(hours=SESSION_HOURS)
+    return 0.0, now + timedelta(hours=SESSION_HOURS)
 
 
 def build_payload() -> dict:
@@ -123,23 +122,27 @@ def build_payload() -> dict:
 
     session_tokens, session_resets = current_session(entries, now)
 
-    # Calendar week (local time), Monday..Sunday — matches the UI bar labels.
+    # Weekly %: rolling last-7-days window (Claude's weekly limit is a
+    # rolling window anchored per-account, e.g. "resets Tue 11:59" — not a
+    # calendar week). The Mon-Sun bars stay calendar-based as a visual.
     local_now = now.astimezone()
     monday = (local_now - timedelta(days=local_now.weekday())).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     week_resets = monday + timedelta(days=7)
+    rolling_start = now - timedelta(days=7)
 
     daily = [0.0] * 7
+    week_tokens = 0.0
     fam_tokens: dict[str, float] = {}
     for ts, fam, tok in entries:
         lts = ts.astimezone()
-        if lts < monday:
-            continue
-        daily[lts.weekday()] += tok
-        fam_tokens[fam] = fam_tokens.get(fam, 0) + tok
+        if lts >= monday:
+            daily[lts.weekday()] += tok
+        if ts >= rolling_start:
+            week_tokens += tok
+            fam_tokens[fam] = fam_tokens.get(fam, 0) + tok
 
-    week_tokens = sum(daily)
     max_day = max(daily) or 1.0
 
     models = [
