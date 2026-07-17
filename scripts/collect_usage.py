@@ -9,6 +9,10 @@ scripts/.env — copy .env.example). Limits are estimated against configurable
 budgets — calibrate SESSION_BUDGET / WEEK_BUDGET below by comparing with
 Claude Code's /usage screen.
 
+Publishes are skipped when nothing meaningful changed since the last one
+(compared via a cache file in the system temp dir) — pass --force to
+publish regardless.
+
 Usage:
   python collect_usage.py --dry-run     # print JSON, don't publish
   python collect_usage.py               # collect + publish once (retained)
@@ -18,6 +22,7 @@ Usage:
 import json
 import ssl
 import sys
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -172,6 +177,20 @@ def build_payload() -> dict:
     }
 
 
+CACHE_FILE = Path(tempfile.gettempdir()) / "claude-usage-panel.last.json"
+
+
+def comparison_key(payload: dict) -> str:
+    """Canonical form of the payload with volatile fields removed, so
+    'nothing actually changed' runs can skip the publish. updated_at is
+    always fresh, and an idle session's resets_at drifts with the clock."""
+    p = json.loads(json.dumps(payload))
+    p.pop("updated_at", None)
+    if p.get("today", {}).get("tokens_used", 0) == 0:
+        p["today"]["session_resets_at"] = "idle"
+    return json.dumps(p, sort_keys=True)
+
+
 def publish(payload: dict) -> None:
     import paho.mqtt.client as mqtt
 
@@ -199,11 +218,20 @@ def main() -> None:
         i = args.index("--watch")
         interval = int(args[i + 1]) if i + 1 < len(args) else 60
 
+    force = "--force" in args
+
     while True:
         payload = build_payload()
-        publish(payload)
-        print(f"{datetime.now():%H:%M:%S} published: session {payload['today']['session_used_pct']}%, "
-              f"week {payload['week']['used_pct']}%")
+        key = comparison_key(payload)
+        prev = CACHE_FILE.read_text(encoding="utf-8") if CACHE_FILE.exists() else None
+        if key == prev and not force:
+            print(f"{datetime.now():%H:%M:%S} unchanged, skipped")
+        else:
+            publish(payload)
+            CACHE_FILE.write_text(key, encoding="utf-8")
+            print(f"{datetime.now():%H:%M:%S} published: session {payload['today']['session_used_pct']}%, "
+                  f"week {payload['week']['used_pct']}%")
+        force = False  # --force applies to the first iteration only
         if not interval:
             break
         time.sleep(interval)
