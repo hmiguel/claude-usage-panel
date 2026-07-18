@@ -2,8 +2,6 @@
 #include "config.h"
 
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
 #include <ArduinoJson.h>
 
 // Manual UTC "timegm" — avoids depending on a TZ-aware timegm() that may not
@@ -102,33 +100,4 @@ bool parse_usage_json(const char *json, UsageData &out) {
 
   out = parsed;
   return true;
-}
-
-bool fetch_usage_data(UsageData &out) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("fetch_usage_data: WiFi not connected");
-    return false;
-  }
-
-  WiFiClientSecure client;
-  client.setInsecure(); // gist raw content — skip cert validation
-
-  HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // gist raw URLs 302
-  if (!http.begin(client, DATA_URL)) {
-    Serial.println("fetch_usage_data: http.begin failed");
-    return false;
-  }
-
-  int code = http.GET();
-  if (code != HTTP_CODE_OK) {
-    Serial.printf("fetch_usage_data: GET failed, code=%d\n", code);
-    http.end();
-    return false;
-  }
-
-  String body = http.getString();
-  http.end();
-
-  return parse_usage_json(body.c_str(), out);
 }

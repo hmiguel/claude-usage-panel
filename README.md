@@ -5,6 +5,8 @@ Real usage data is collected locally from Claude Code's own transcript files
 and pushed to the panel over MQTT — no API keys, no cloud service, no
 credentials leave your machine except the MQTT broker of your choice.
 
+![Claude Usage Panel on the desk](docs/images/device.jpg)
+
 ## Screens
 
 1. **Session** — arc gauge with the current 5h session %, token counts, reset countdown
@@ -31,9 +33,6 @@ minutes idle and turns off after 15 — any touch wakes it instantly.
 - The session/week **percentages are estimates** against configurable budget
   constants — calibrate them against Claude Code's `/usage` screen (see
   comments at the top of the script).
-- If MQTT is unreachable, the firmware falls back to polling a URL
-  (`DATA_URL` in config — e.g. a GitHub Gist serving the same JSON schema)
-  over HTTPS every 30s.
 
 ## Getting started
 
@@ -78,9 +77,9 @@ percentages don't match your plan.
 
 - `src/board_init.cpp` — panel/touch/backlight bring-up (ported from the vendor demo)
 - `src/ui.cpp` — the whole UI; design tokens at the top
-- `src/net.cpp` — WiFi + shared JSON parser + HTTPS fallback fetch
+- `src/net.cpp` — WiFi + shared JSON parser
 - `src/mqtt_client.cpp` — HiveMQ TLS connection, subscriptions, reconnect
-- `src/main.cpp` — glue: boot → MQTT push loop (+ HTTP fallback)
+- `src/main.cpp` — glue: boot → MQTT push loop
 - `include/config.h` — WiFi, broker, topics, timezone, backlight timing (gitignored — copy from `config.example.h`)
 - `scripts/collect_usage.py` — reads local Claude Code transcripts, publishes real usage
 - `scripts/publish_usage.py` — low-level manual publisher (`usage <file.json>` / `thinking 1|0`)
@@ -115,8 +114,6 @@ percentages don't match your plan.
   `mqtt: connect failed, state=N` (see PubSubClient state codes).
 - **Panel numbers don't match `/usage`:** recalibrate `SESSION_BUDGET` /
   `WEEK_BUDGET` in `collect_usage.py`.
-- **HTTP fallback fails but curl works:** confirm `DATA_URL` has no revision
-  hash (for a Gist) and WiFi is 2.4 GHz.
 
 ## License
 

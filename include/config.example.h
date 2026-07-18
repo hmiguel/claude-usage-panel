@@ -18,13 +18,6 @@
 // Lightweight "1"/"0" for the thinking LED — instant updates.
 #define MQTT_TOPIC_THINKING "claude/thinking"
 
-// --- HTTP fallback (used only while MQTT is disconnected) ---
-// Raw gist URL, revision hash stripped so it always serves the latest edit.
-#define DATA_URL "https://gist.githubusercontent.com/<user>/<gist_id>/raw/<file>"
-
-// How often to poll DATA_URL when MQTT is down.
-#define FETCH_INTERVAL_MS 30000
-
 // POSIX TZ spec for the on-screen clock (default: Portugal mainland,
 // WET/WEST with automatic DST). Epoch math elsewhere is unaffected.
 #define TZ_SPEC "WET0WEST,M3.5.0/1,M10.5.0"

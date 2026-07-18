@@ -30,7 +30,3 @@ bool wifi_is_connected();
 // Returns false on parse failure, leaving `out` untouched. Shared by the
 // HTTP fetch path and the MQTT message handler.
 bool parse_usage_json(const char *json, UsageData &out);
-
-// Fetches DATA_URL and parses it into `out`. Returns false on network/parse
-// failure, leaving `out` untouched so the caller can keep showing stale data.
-bool fetch_usage_data(UsageData &out);
