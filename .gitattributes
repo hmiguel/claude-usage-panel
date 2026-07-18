@@ -1,0 +1,7 @@
+# Normalize to LF in the repo; Git converts to the platform's native line
+# ending on checkout. Keeps diffs clean across Windows/Linux/macOS clones.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
