@@ -1,4 +1,5 @@
 #include "board_init.h"
+#include "config.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -15,6 +16,7 @@
 
 #define PANEL_W 480
 #define PANEL_H 480
+#define BL_LEDC_CHANNEL 0
 
 // The ESP-IDF BSP for this board drives the backlight via LEDC PWM on this
 // pin; the Arduino demo we ported never touches it (likely relied on a
@@ -84,10 +86,11 @@ void board_init() {
   Serial.begin(115200);
 
   // Backlight is ACTIVE LOW on this board — the vendor BSP's brightness code
-  // inverts duty (100% brightness = duty 0). Driving this HIGH turns the
-  // backlight OFF, which is exactly the mistake that kept the screen black.
-  pinMode(BSP_LCD_BACKLIGHT, OUTPUT);
-  digitalWrite(BSP_LCD_BACKLIGHT, LOW);
+  // inverts duty (100% brightness = duty 0). LEDC PWM gives real dimming
+  // for the idle power management in board_loop_tick().
+  ledcSetup(BL_LEDC_CHANNEL, 5000, 10);
+  ledcAttachPin(BSP_LCD_BACKLIGHT, BL_LEDC_CHANNEL);
+  board_set_backlight(100);
 
   Wire.begin(47, 48);
   expander->pinMode(5, OUTPUT);
@@ -141,10 +144,31 @@ void board_init() {
   Serial.println("board_init: ST7701/GT911 driver bring-up complete");
 }
 
+void board_set_backlight(uint8_t percent) {
+  if (percent > 100) percent = 100;
+  // Active low: 100% brightness = duty 0.
+  ledcWrite(BL_LEDC_CHANNEL, (100 - percent) * 1023 / 100);
+}
+
+// Dims/blanks the backlight after touch inactivity; any touch resets
+// LVGL's inactivity clock and restores full brightness on the next tick.
+static void backlight_idle_tick() {
+  static uint8_t current_pct = 100;
+  uint32_t idle = lv_display_get_inactive_time(NULL);
+  uint8_t target = (idle > BACKLIGHT_OFF_AFTER_MS)   ? 0
+                   : (idle > BACKLIGHT_DIM_AFTER_MS) ? BACKLIGHT_DIM_PCT
+                                                     : 100;
+  if (target != current_pct) {
+    current_pct = target;
+    board_set_backlight(target);
+  }
+}
+
 void board_loop_tick() {
   lv_timer_handler();
   if (fb_dirty) {
     fb_dirty = false;
     gfx->draw16bitRGBBitmap(0, 0, (uint16_t *)disp_draw_buf, PANEL_W, PANEL_H);
   }
+  backlight_idle_tick();
 }

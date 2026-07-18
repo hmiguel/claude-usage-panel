@@ -28,3 +28,8 @@
 // POSIX TZ spec for the on-screen clock (default: Portugal mainland,
 // WET/WEST with automatic DST). Epoch math elsewhere is unaffected.
 #define TZ_SPEC "WET0WEST,M3.5.0/1,M10.5.0"
+
+// --- Backlight power management (touch wakes instantly) ---
+#define BACKLIGHT_DIM_AFTER_MS  (2 * 60 * 1000UL)   // dim after 2 min idle
+#define BACKLIGHT_DIM_PCT       20                   // dimmed brightness %
+#define BACKLIGHT_OFF_AFTER_MS  (15 * 60 * 1000UL)  // off after 15 min idle
