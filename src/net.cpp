@@ -72,8 +72,6 @@ bool parse_usage_json(const char *json, UsageData &out) {
   parsed.session_used_pct = doc["today"]["session_used_pct"] | 0;
   parsed.session_resets_at =
       parse_iso8601_utc(doc["today"]["session_resets_at"] | "");
-  parsed.tokens_used = doc["today"]["tokens_used"] | 0L;
-  parsed.tokens_limit = doc["today"]["tokens_limit"] | 0L;
 
   parsed.week_used_pct = doc["week"]["used_pct"] | 0;
   parsed.week_resets_at = parse_iso8601_utc(doc["week"]["resets_at"] | "");

@@ -86,6 +86,34 @@ def read_access_token() -> str | None:
     return creds.get("claudeAiOauth", {}).get("accessToken") or None
 
 
+# The OAuth usage endpoint isn't reliable under frequent polling (seen
+# failing several calls out of six, ~4s apart) — cache the last successful
+# reading and reuse it on failure instead of silently falling back to the
+# local budget estimate, which uses an unrelated accounting scale and made
+# published percentages alternate between two unrelated series.
+API_CACHE_FILE = Path(tempfile.gettempdir()) / "claude-usage-panel.api.json"
+API_CACHE_MAX_AGE = timedelta(minutes=30)
+
+
+def _load_cached_api_usage() -> dict | None:
+    try:
+        cached = json.loads(API_CACHE_FILE.read_text(encoding="utf-8"))
+        fetched_at = datetime.fromisoformat(cached["fetched_at"])
+    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        return None
+    if datetime.now(timezone.utc) - fetched_at > API_CACHE_MAX_AGE:
+        return None
+    return cached["usage"]
+
+
+def _save_cached_api_usage(usage: dict) -> None:
+    payload = {"fetched_at": datetime.now(timezone.utc).isoformat(), "usage": usage}
+    try:
+        API_CACHE_FILE.write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def fetch_oauth_usage() -> dict | None:
     token = read_access_token()
     if not token:
@@ -101,9 +129,16 @@ def fetch_oauth_usage() -> dict | None:
     )
     try:
         with urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError):
+            usage = json.loads(resp.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        cached = _load_cached_api_usage()
+        if cached is not None:
+            print(f"  (usage API fetch failed: {exc}; reusing last known reading)")
+            return cached
+        print(f"  (usage API fetch failed: {exc}; no cached reading, using local estimate)")
         return None
+    _save_cached_api_usage(usage)
+    return usage
 
 
 def parse_api_datetime(value: str | None) -> datetime | None:
@@ -140,10 +175,6 @@ def usage_reset(window: dict | None) -> datetime | None:
     return parse_api_datetime(window.get("resets_at"))
 
 
-def derived_limit(tokens_used: float, pct: int | None, fallback: int) -> int:
-    if pct and pct > 0:
-        return max(round(tokens_used / (pct / 100)), round(tokens_used))
-    return fallback
 def weighted_tokens(usage: dict) -> float:
     return (
         usage.get("input_tokens", 0)
@@ -270,15 +301,12 @@ def build_payload() -> dict:
         session_pct = min(100, round(session_tokens / session_budget * 100))
     if week_pct is None:
         week_pct = min(100, round(week_tokens / week_budget * 100))
-    token_limit = derived_limit(session_tokens, session_pct, session_budget)
 
     return {
         "updated_at": iso_utc(now),
         "today": {
             "session_used_pct": session_pct,
             "session_resets_at": iso_utc(session_reset),
-            "tokens_used": round(session_tokens),
-            "tokens_limit": token_limit,
         },
         "week": {
             "used_pct": week_pct,
@@ -300,7 +328,7 @@ def comparison_key(payload: dict) -> str:
     always fresh, and an idle session's resets_at drifts with the clock."""
     p = json.loads(json.dumps(payload))
     p.pop("updated_at", None)
-    if p.get("today", {}).get("tokens_used", 0) == 0:
+    if p.get("today", {}).get("session_used_pct", 0) == 0:
         p["today"]["session_resets_at"] = "idle"
     return json.dumps(p, sort_keys=True)
 

@@ -2,9 +2,7 @@
   "updated_at": "2026-07-17T14:32:00Z",
   "today": {
     "session_used_pct": 42,
-    "session_resets_at": "2026-07-17T18:00:00Z",
-    "tokens_used": 128000,
-    "tokens_limit": 300000
+    "session_resets_at": "2026-07-17T18:00:00Z"
   },
   "week": {
     "used_pct": 61,

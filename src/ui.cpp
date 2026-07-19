@@ -174,16 +174,6 @@ static void build_nav_dots(lv_obj_t *parent) {
   }
 }
 
-// "512k" below a million, "5.2M" above — keeps the label short now that
-// real usage runs into millions of tokens.
-static void format_tokens(char *out, size_t n, long tokens) {
-  if (tokens >= 1000000) {
-    snprintf(out, n, "%.1fM", tokens / 1000000.0);
-  } else {
-    snprintf(out, n, "%ldk", tokens / 1000);
-  }
-}
-
 // Last received usage snapshot, so the countdown can be recomputed every
 // second instead of only when a payload arrives.
 static UsageData last_data;
@@ -200,17 +190,14 @@ static void refresh_today_sublabel() {
   // countdown) instead of freezing at the stale percentage until the next
   // payload — which then repaints the real state.
   if (now >= CLOCK_SANE_EPOCH && last_data.session_resets_at > 0 &&
-      now >= last_data.session_resets_at && last_data.tokens_used > 0) {
+      now >= last_data.session_resets_at && last_data.session_used_pct > 0) {
     last_data.session_used_pct = 0;
-    last_data.tokens_used = 0;
     last_data.session_resets_at = 0; // unknown until fresh data arrives
     lv_arc_set_value(today_arc, 0);
     lv_label_set_text(today_pct_label, "0%");
   }
 
-  char buf[64], used_str[12], limit_str[12], eta_str[12];
-  format_tokens(used_str, sizeof(used_str), last_data.tokens_used);
-  format_tokens(limit_str, sizeof(limit_str), last_data.tokens_limit);
+  char buf[64], eta_str[12];
 
   if (now < CLOCK_SANE_EPOCH || last_data.session_resets_at == 0) {
     // Clock not NTP-synced yet (a countdown against 1970 would claim
@@ -226,7 +213,7 @@ static void refresh_today_sublabel() {
     }
   }
 
-  snprintf(buf, sizeof(buf), "%s / %s tokens - resets in %s", used_str, limit_str, eta_str);
+  snprintf(buf, sizeof(buf), "resets in %s", eta_str);
   lv_label_set_text(today_sub_label, buf);
 }
 

@@ -10,8 +10,6 @@ struct ModelUsage {
 struct UsageData {
   int session_used_pct;
   time_t session_resets_at;
-  long tokens_used;
-  long tokens_limit;
   int week_used_pct;
   time_t week_resets_at;
   int daily_pct[7];
