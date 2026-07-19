@@ -5,12 +5,12 @@ Reads ~/.claude/projects/**/*.jsonl (written by Claude Code itself), computes
 session/week/per-model usage, and publishes the panel's usage JSON to MQTT.
 
 No credentials or network calls beyond the MQTT broker (config from
-scripts/.env — copy .env.example). Limits are estimated against configurable
-budgets — calibrate SESSION_BUDGET / WEEK_BUDGET below by comparing with
+scripts/.env ??? copy .env.example). Limits are estimated against configurable
+budgets ??? calibrate SESSION_BUDGET / WEEK_BUDGET below by comparing with
 Claude Code's /usage screen.
 
 Publishes are skipped when nothing meaningful changed since the last one
-(compared via a cache file in the system temp dir) — pass --force to
+(compared via a cache file in the system temp dir) ??? pass --force to
 publish regardless.
 
 Usage:
@@ -20,10 +20,13 @@ Usage:
 """
 
 import json
+import os
 import ssl
 import sys
 import tempfile
 import time
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,18 +36,114 @@ from publish_usage import read_config  # shared .env config loader
 # Weighted tokens: cache reads are far cheaper than fresh tokens, so weight
 # them down instead of counting raw.
 CACHE_READ_WEIGHT = 0.1
-# Budgets in weighted tokens. Calibrate against Claude Code's /usage screen:
-# if /usage says 40% but the panel says 20%, halve the budget.
-# Calibrated 2026-07-17 against Claude Code's /usage screen (session 67%,
-# week 18% at 6.14M / 17.6M weighted tokens respectively).
-SESSION_BUDGET = 9_000_000    # per 5h session window
-WEEK_BUDGET = 100_000_000     # per rolling 7-day window
+# Fallback budgets in weighted tokens, used only when the OAuth usage API is
+# unavailable. The API returns real utilization percentages and reset times.
+DEFAULT_SESSION_BUDGET = 9_000_000    # per 5h session window
+DEFAULT_WEEK_BUDGET = 100_000_000     # per rolling 7-day window
 SESSION_HOURS = 5
 # -----------------------------------------------------------------------
 
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
+ENV_FILE = Path(__file__).with_name(".env")
+CLAUDE_CONFIG_DIR = Path(os.environ.get("CLAUDE_CONFIG_DIR", "")) if os.environ.get("CLAUDE_CONFIG_DIR") else Path.home() / ".claude"
+CLAUDE_CREDENTIALS = CLAUDE_CONFIG_DIR / ".credentials.json"
+API_URL_USAGE = "https://api.anthropic.com/api/oauth/usage"
+OAUTH_BETA = "oauth-2025-04-20"
+USER_AGENT = "claude-code/2.1.85"
 
 
+def read_local_env() -> dict[str, str]:
+    values = {}
+    if not ENV_FILE.exists():
+        return values
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values
+
+
+def configured_budget(name: str, default: int) -> int:
+    env = read_local_env()
+    raw = os.environ.get(name) or env.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.replace("_", ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+
+def read_access_token() -> str | None:
+    try:
+        creds = json.loads(CLAUDE_CREDENTIALS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return creds.get("claudeAiOauth", {}).get("accessToken") or None
+
+
+def fetch_oauth_usage() -> dict | None:
+    token = read_access_token()
+    if not token:
+        return None
+    req = Request(
+        API_URL_USAGE,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "anthropic-beta": OAUTH_BETA,
+        },
+    )
+    try:
+        with urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return None
+
+
+def parse_api_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def usage_window(usage: dict | None, key: str) -> dict | None:
+    if not usage:
+        return None
+    window = usage.get(key)
+    return window if isinstance(window, dict) else None
+
+
+def usage_pct(window: dict | None) -> int | None:
+    if not window:
+        return None
+    value = window.get("utilization")
+    if value is None:
+        return None
+    try:
+        return max(0, min(100, round(float(value))))
+    except (TypeError, ValueError):
+        return None
+
+
+def usage_reset(window: dict | None) -> datetime | None:
+    if not window:
+        return None
+    return parse_api_datetime(window.get("resets_at"))
+
+
+def derived_limit(tokens_used: float, pct: int | None, fallback: int) -> int:
+    if pct and pct > 0:
+        return max(round(tokens_used / (pct / 100)), round(tokens_used))
+    return fallback
 def weighted_tokens(usage: dict) -> float:
     return (
         usage.get("input_tokens", 0)
@@ -94,7 +193,7 @@ def load_entries(max_age_days: float = 8.0) -> list[tuple[datetime, str, float]]
                         continue
                     tok = weighted_tokens(usage)
                     # A message can span several JSONL lines carrying
-                    # progressively-updated usage — keep the largest snapshot
+                    # progressively-updated usage ??? keep the largest snapshot
                     # per (message, request), not the first.
                     key = (msg.get("id"), d.get("requestId"))
                     prev = best.get(key)
@@ -124,11 +223,14 @@ def current_session(entries, now: datetime):
 def build_payload() -> dict:
     now = datetime.now(timezone.utc)
     entries = load_entries()
+    real_usage = fetch_oauth_usage()
 
     session_tokens, session_resets = current_session(entries, now)
+    session_budget = configured_budget("SESSION_BUDGET", DEFAULT_SESSION_BUDGET)
+    week_budget = configured_budget("WEEK_BUDGET", DEFAULT_WEEK_BUDGET)
 
     # Weekly %: rolling last-7-days window (Claude's weekly limit is a
-    # rolling window anchored per-account, e.g. "resets Tue 11:59" — not a
+    # rolling window anchored per-account, e.g. "resets Tue 11:59" ??? not a
     # calendar week). The Mon-Sun bars stay calendar-based as a visual.
     local_now = now.astimezone()
     monday = (local_now - timedelta(days=local_now.weekday())).replace(
@@ -158,17 +260,29 @@ def build_payload() -> dict:
     def iso_utc(dt: datetime) -> str:
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    five_hour = usage_window(real_usage, "five_hour")
+    seven_day = usage_window(real_usage, "seven_day")
+    session_pct = usage_pct(five_hour)
+    week_pct = usage_pct(seven_day)
+    session_reset = usage_reset(five_hour) or session_resets
+    week_reset = usage_reset(seven_day) or week_resets
+    if session_pct is None:
+        session_pct = min(100, round(session_tokens / session_budget * 100))
+    if week_pct is None:
+        week_pct = min(100, round(week_tokens / week_budget * 100))
+    token_limit = derived_limit(session_tokens, session_pct, session_budget)
+
     return {
         "updated_at": iso_utc(now),
         "today": {
-            "session_used_pct": min(100, round(session_tokens / SESSION_BUDGET * 100)),
-            "session_resets_at": iso_utc(session_resets),
+            "session_used_pct": session_pct,
+            "session_resets_at": iso_utc(session_reset),
             "tokens_used": round(session_tokens),
-            "tokens_limit": SESSION_BUDGET,
+            "tokens_limit": token_limit,
         },
         "week": {
-            "used_pct": min(100, round(week_tokens / WEEK_BUDGET * 100)),
-            "resets_at": iso_utc(week_resets),
+            "used_pct": week_pct,
+            "resets_at": iso_utc(week_reset),
             # Bars are relative to the busiest day so the chart stays readable.
             "daily_pct": [round(d / max_day * 100) for d in daily],
         },
@@ -239,3 +353,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
